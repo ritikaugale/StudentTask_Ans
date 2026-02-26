@@ -1,0 +1,268 @@
+---
+title: "Docstring Task"
+format: typst
+engine: julia
+julia:
+  exeflags: ["--project"]
+---
+
+```{julia}
+#| echo: false
+using Optim
+using ADTypes: AutoForwardDiff
+import StatsBase: Weights, sample
+import Random: MersenneTwister, AbstractRNG
+```
+
+# Task
+
+Write a Julia docstring for each function marked with `# ← write docstring here`.
+Each docstring should follow the standard Julia convention: a string literal placed *immediately before* the function definition.
+
+Here is a minimal example:
+
+````julia
+"""
+    my_function(x, y)
+
+Brief one-sentence description.
+
+# Arguments
+- `x`: what x is
+- `y`: what y is
+
+# Returns
+Description of return value.
+
+# Example
+```julia
+my_function(1, 2)  # => 3
+```
+"""
+function my_function(x, y)
+    x + y
+end
+````
+
+The functions are arranged in five levels of increasing difficulty.
+The pre-defined infrastructure at the top contains **worked examples** of the standard we are aiming for; study them before writing your own.
+
+---
+
+# Pre-defined infrastructure — worked examples
+
+The following types and helpers are fully implemented and documented.
+**Do not write docstrings for them** — they are there to show you what a good docstring looks like.
+
+Notice that:
+- The docstring describes *intent*, not the code line by line.
+- Inline comments explain *why* a design decision was made, not *what* the line does.
+- Examples are minimal but runnable.
+
+```{julia}
+"""
+    Probabilities(pairs::Pair...)
+
+A named probability table mapping symbolic event labels to vectors of
+conditional probabilities over latent states.
+
+Each pair `label => vec` associates an event label (e.g. `:A`) with a vector
+whose `i`-th entry is `P(event | state i)`. All vectors must have the same
+length (= number of latent states).
+
+Storing the table as a matrix with a key index lets both `getindex` overloads
+share the same backing array without copying.
+
+# Arguments
+- `pairs`: one or more `Symbol => AbstractVector` pairs, one per event.
+
+# Returns
+A `Probabilities` object whose columns are the supplied probability vectors
+and whose `keys` field preserves the declaration order.
+
+# Example
+```julia
+p = Probabilities(
+    :A => [1, 1//2, 1//4],
+    :B => [0, 1//2, 1//4]
+)
+p[:A]  # => [1, 1//2, 1//4]
+p[1]   # => [1, 0]   (all events for state 1)
+"""
+struct Probabilities{T1, T2}
+    a::Matrix{T1}
+    keys::Vector{T2}
+end
+
+function Probabilities(pairs::Pair...)
+    # hcat turns the list of column vectors into a single matrix,
+    # keeping the column order identical to the declaration order.
+    a = reduce(hcat, map(last, pairs))
+    keys = [first(p) for p in pairs]
+    Probabilities(a, keys)
+end
+
+# base functions usually do not get docstrings if you overload their methods
+# unless they do something unusual
+# Key-based indexing: retrieve P(event | state) for a given event label.
+function Base.getindex(p::Probabilities{T1, T2}, key::T2) where {T1, T2}
+    idx = findfirst(isequal(key), p.keys)
+    idx === nothing && throw(KeyError(key))
+    p.a[:, idx]
+end
+
+# Integer-based indexing: retrieve P(all events | state i) for a given state.
+function Base.getindex(p::Probabilities, i::Int)
+    p.a[i, :]
+end
+
+# Expose both axes so that generic code (e.g. `sample(axes(p, 2), ...)`)
+# can iterate over event labels without knowing the internal layout.
+Base.axes(p::Probabilities) = (Base.axes(p.a, 1), p.keys)
+Base.axes(p::Probabilities, d::Int) = d in (1, 2) ? axes(p)[d] : throw(BoundsError(p, d))
+```
+
+The shared probability table and uniform prior used throughout the examples:
+
+```{julia}
+probs = Probabilities(
+    :A => [1//1, 1//2, 1//4],
+    :B => [0,    1//2, 1//4],
+    :C => [0,    0,    1//4],
+    :D => [0,    0,    1//4]
+)
+prior = [1/3, 1/3, 1/3]
+```
+
+# One-liners
+
+Each function has a single-line body with a direct mathematical definition.
+The main challenge is translating a formula into plain language without over-explaining — do not repeat the code, describe what it *means*.
+
+```{julia}
+sigmoid(x) = 1 / (1 + exp(-x))  # ← write docstring here
+
+softmax(x) = exp.(x) ./ sum(exp.(x))  # ← write docstring here
+
+accuracy(predictions, actual) = sum(predictions .== actual) / length(actual)  # ← write docstring here
+```
+
+# Single-step Bayesian inference
+
+The functions have short bodies but rich *statistical* meaning.
+A correct docstring cannot just describe types — it must explain what the arguments represent probabilistically (prior beliefs, likelihoods, evidence) and what the output tells the user about their model.
+For `probα`, also explain *why* mixing in a uniform distribution is a useful modelling choice.
+
+```{julia}
+# ← write docstring here
+function bayes(event::Symbol, prior, probabilities)
+    numerators = probabilities[event] .* prior
+    numerators ./ sum(numerators)
+end
+
+# ← write docstring here
+function probα(α, p::Probabilities{T1, T2}) where {T1, T2}
+    error_val = one(T1) / size(p.a, 2)
+    unif = fill(error_val, size(p.a))
+    a = unif * α + p.a * (one(α) - α)
+    return Probabilities(a, p.keys)
+end
+```
+
+# Sequential inference
+
+There are multiple related functions and overloads whose docstrings must be consistent with each other.
+You need to explain *how they relate* — in particular, how `ll` for a single event and `ll` for a vector are connected, and why `bayes` for a vector is defined as a one-liner wrapper around `ll` rather than independently.
+
+Also note that `ll` returns *two* things: make sure your docstring is precise about what both are and why they are returned together.
+
+```{julia}
+# ← write docstring here
+function ll(event::Symbol, prior, probs, cll = 0.0)
+    numerators = probs[event] .* prior
+    evidence = sum(numerators)
+    cll += log(evidence)
+    post = numerators / evidence
+    return (post, cll)
+end
+
+# ← write docstring here
+function ll(events::AbstractVector, prior, probs)
+    reduce(
+        (last, event) -> ll(event, last[1], probs, last[2]),
+        events;
+        init = (prior, 0.0)
+    )
+end
+
+# ← write docstring here
+bayes(events::AbstractVector, prior, probs) = first(ll(events, prior, probs))
+```
+
+---
+
+# Population-level log-likelihood
+
+`lls` is defined twice as two overloads with different input types.
+Both overloads do conceptually the same thing, but one is a convenience wrapper.
+Your docstrings should make this relationship explicit and explain *why* the matrix overload exists as a separate method rather than handling both cases inside one function.
+
+```{julia}
+# ← write docstring here
+function lls(data, prior, probs)
+    reduce((acc, row) -> acc + ll(row, prior, probs)[2], data; init = 0.0)
+end
+
+# ← write docstring here
+function lls(data::Matrix, prior, probs)
+    lls(eachrow(data), prior, probs)
+end
+```
+
+---
+
+# Simulation and estimation pipeline
+
+These four functions form a complete analysis pipeline, and a good docstring must convey each function's *role in that pipeline*, not just its inputs and outputs in isolation.
+A reader should be able to read the four docstrings in sequence and understand the full workflow before reading any of the bodies.
+
+For `fit` in particular, explain *why* sigmoid and softmax are applied inside the objective — the reason is statistical, not merely computational.
+For `simulateaccuracy`, explain what the return value actually measures and under what conditions it could be misleading.
+
+```{julia}
+# ← write docstring here
+function sim(n, k, probs, α, prior)
+    probs_α = probα(α, probs)
+    children = [Child(probs_α, i) for i in sample(axes(probs_α, 1), Weights(prior), n)]
+    data = map(c -> c(sample(k)), children)
+    (children, data)
+end
+
+# ← write docstring here
+function fit(data, probs)
+    f(α, prior) = lls(data, prior, probα(α, probs))
+    function g(x)
+        α     = sigmoid(x[1])
+        prior = softmax(x[2:end])
+        -f(α, prior)
+    end
+    result    = optimize(g, zeros(4), BFGS(); autodiff = AutoForwardDiff())
+    α_opt     = sigmoid(result.minimizer[1])
+    prior_opt = softmax(result.minimizer[2:end])
+    (α_opt, prior_opt, result.minimum)
+end
+
+# ← write docstring here
+function predict(data, probs, α, prior)
+    [argmax(bayes(d, prior, probα(α, probs))) for d in data]
+end
+
+# ← write docstring here
+function simulateaccuracy(n, k, probs, α, prior)
+    children, data = sim(n, k, probs, α, prior)
+    α_opt, prior_opt, _ = fit(data, probs)
+    preds  = predict(data, probs, α_opt, prior_opt)
+    actual = [c.i for c in children]
+    accuracy(preds, actual)
+end
+```

@@ -1,0 +1,10 @@
+---
+title: "Docstring Task"
+format: typst
+---
+
+# Task
+
+Built a simulation that compares the power of a t-test on the original scale vs the same test on rank transformation in whatever programming language you like.
+Plot both curves for a fixed sample size variying effect sizes and a fixed effect size varying sample size.
+Substantive interpretation is secondary, more important is clean minimal code but extra points if you can tell what a t-test on rank transformation is usually callded and what possible benefits such implementation has compared with the standard rank test (hint: how does the standard rank test deal with unequal variances).
