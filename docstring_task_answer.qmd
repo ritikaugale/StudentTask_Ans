@@ -1,0 +1,310 @@
+---
+title: "Docstring Task"
+format: typst
+engine: julia
+julia:
+  exeflags: ["--project"]
+---
+
+```{julia}
+#| echo: false
+using Optim
+using ADTypes: AutoForwardDiff
+import StatsBase: Weights, sample
+import Random: MersenneTwister, AbstractRNG
+```
+
+# Task
+
+Write a Julia docstring for each function marked with `# ← write docstring here`.
+Each docstring should follow the standard Julia convention: a string literal placed *immediately before* the function definition.
+
+Here is a minimal example:
+
+````julia
+"""
+    my_function(x, y)
+
+Brief one-sentence description.
+
+# Arguments
+- `x`: what x is
+- `y`: what y is
+
+# Returns
+Description of return value.
+
+# Example
+```julia
+my_function(1, 2)  # => 3
+```
+"""
+function my_function(x, y)
+    x + y
+end
+````
+
+The functions are arranged in five levels of increasing difficulty.
+The pre-defined infrastructure at the top contains **worked examples** of the standard we are aiming for; study them before writing your own.
+
+---
+
+# Pre-defined infrastructure — worked examples
+
+The following types and helpers are fully implemented and documented.
+**Do not write docstrings for them** — they are there to show you what a good docstring looks like.
+
+Notice that:
+- The docstring describes *intent*, not the code line by line.
+- Inline comments explain *why* a design decision was made, not *what* the line does.
+- Examples are minimal but runnable.
+
+```{julia}
+"""
+    Probabilities(pairs::Pair...)
+
+A named probability table mapping symbolic event labels to vectors of
+conditional probabilities over latent states.
+
+Each pair `label => vec` associates an event label (e.g. `:A`) with a vector
+whose `i`-th entry is `P(event | state i)`. All vectors must have the same
+length (= number of latent states).
+
+Storing the table as a matrix with a key index lets both `getindex` overloads
+share the same backing array without copying.
+
+# Arguments
+- `pairs`: one or more `Symbol => AbstractVector` pairs, one per event.
+
+# Returns
+A `Probabilities` object whose columns are the supplied probability vectors
+and whose `keys` field preserves the declaration order.
+
+# Example
+```julia
+p = Probabilities(
+    :A => [1, 1//2, 1//4],
+    :B => [0, 1//2, 1//4]
+)
+p[:A]  # => [1, 1//2, 1//4]
+p[1]   # => [1, 0]   (all events for state 1)
+"""
+struct Probabilities{T1, T2}
+    a::Matrix{T1}
+    keys::Vector{T2}
+end
+
+function Probabilities(pairs::Pair...)
+    # hcat turns the list of column vectors into a single matrix,
+    # keeping the column order identical to the declaration order.
+    a = reduce(hcat, map(last, pairs))
+    keys = [first(p) for p in pairs]
+    Probabilities(a, keys)
+end
+
+# base functions usually do not get docstrings if you overload their methods
+# unless they do something unusual
+# Key-based indexing: retrieve P(event | state) for a given event label.
+function Base.getindex(p::Probabilities{T1, T2}, key::T2) where {T1, T2}
+    idx = findfirst(isequal(key), p.keys)
+    idx === nothing && throw(KeyError(key))
+    p.a[:, idx]
+end
+
+# Integer-based indexing: retrieve P(all events | state i) for a given state.
+function Base.getindex(p::Probabilities, i::Int)
+    p.a[i, :]
+end
+
+# Expose both axes so that generic code (e.g. `sample(axes(p, 2), ...)`)
+# can iterate over event labels without knowing the internal layout.
+Base.axes(p::Probabilities) = (Base.axes(p.a, 1), p.keys)
+Base.axes(p::Probabilities, d::Int) = d in (1, 2) ? axes(p)[d] : throw(BoundsError(p, d))
+```
+
+The shared probability table and uniform prior used throughout the examples:
+
+```{julia}
+probs = Probabilities(
+    :A => [1//1, 1//2, 1//4],
+    :B => [0,    1//2, 1//4],
+    :C => [0,    0,    1//4],
+    :D => [0,    0,    1//4]
+)
+prior = [1/3, 1/3, 1/3]
+```
+
+# One-liners
+
+Each function has a single-line body with a direct mathematical definition.
+The main challenge is translating a formula into plain language without over-explaining — do not repeat the code, describe what it *means*.
+
+# Sigmoid and Softmax
+
+```{julia}
+"""
+    sigmoid(x)
+
+Compute the logistic sigmoid transform of `x`, mapping real numbers to the open
+interval `(0, 1)`.
+
+This is commonly used to turn an unconstrained parameter into a valid
+probability.
+
+# Arguments
+- `x`: A real number.
+
+# Returns
+A floating-point value in `(0, 1)` (up to floating-point rounding).
+
+# Example
+    sigmoid(0.0)  # => 0.5
+"""
+sigmoid(x) = 1 / (1 + exp(-x))
+
+
+"""
+    softmax(x)
+
+Compute the softmax normalization of a vector `x`.
+
+Interpreting `x` as (unnormalized) scores, `softmax(x)` returns a vector of
+nonnegative values that sums to 1 and can be used as a categorical probability
+vector.
+
+# Arguments
+- `x`: A vector (or other broadcastable collection) of real-valued scores.
+
+# Returns
+A vector of the same shape as `x` whose entries sum to 1.
+
+# Example
+    softmax([0.0, 0.0])  # => [0.5, 0.5]
+"""
+softmax(x) = exp.(x) ./ sum(exp.(x)
+
+
+"""
+    accuracy(predictions, actual)
+
+Compute the fraction of entries in `predictions` that exactly match `actual`.
+
+This is the standard 0–1 classification accuracy for equal-length label
+vectors.
+
+# Arguments
+- `predictions`: Predicted labels (any type supporting `==`).
+- `actual`: Ground-truth labels, same length as `predictions`.
+
+# Returns
+A number in `[0, 1]` equal to `mean(predictions .== actual)`.
+
+# Example
+    accuracy([1, 2, 3], [1, 0, 3])  # => 2/3
+"""
+accuracy(predictions, actual) = sum(predictions .== actual) / length(actual)
+```
+
+---
+
+# Single-step Bayesian inference
+
+```{julia}
+# Single-step Bayesian inference
+
+"""
+    bayes(event::Symbol, prior, probabilities)
+
+Compute the posterior distribution over latent states after observing a single
+event.
+
+`prior` encodes beliefs about states before seeing the event, and
+`probabilities[event]` supplies the likelihood vector `P(event | state)`.
+The returned vector is proportional to `P(event | state) * P(state)` and is
+normalized to sum to 1.
+
+# Arguments
+- `event`: Observed event label (must be a key in `probabilities`).
+- `prior`: Prior probability vector over states.
+- `probabilities`: A `Probabilities` table mapping events to likelihood vectors.
+
+# Returns
+A posterior probability vector over states: `P(state | event)`.
+
+# Example
+    post = bayes(:A, prior, probs)
+    sum(post)  # => 1.0
+"""
+function bayes(event::Symbol, prior, probabilities)
+    numerators = probabilities[event] .* prior
+    numerators ./ sum(numerators)
+end
+
+
+"""
+    probα(α, p::Probabilities)
+
+Construct a noisy ("error-mixed") version of an event likelihood table.
+
+This models lapses or measurement error by mixing each conditional probability
+`P(event | state)` with a uniform distribution over events:
+- `α = 0` leaves the table unchanged (no noise).
+- `α = 1` makes all events equally likely in every state (complete noise).
+
+Mixing with a uniform distribution is a convenient way to represent
+unstructured mistakes when the true event depends on state but errors do not.
+
+# Arguments
+- `α`: Noise weight in `[0, 1]` (typically interpreted as an error rate).
+- `p`: Base `Probabilities` table of event likelihoods.
+
+# Returns
+A `Probabilities` object with the same keys as `p` and likelihoods blended with
+a uniform event distribution.
+
+# Example
+    probs_noisy = probα(0.2, probs)
+    probs_noisy[:A]
+"""
+function probα(α, p::Probabilities{T1, T2}) where {T1, T2}
+    error_val = one(T1) / size(p.a, 2)
+    unif = fill(error_val, size(p.a))
+    a = unif * α + p.a * (one(α) - α)
+    return Probabilities(a, p.keys)
+end
+
+
+"""
+    probα(α, p::Probabilities)
+
+Construct a noisy (\"error-mixed\") version of an event likelihood table.
+
+This models lapses or measurement error by mixing each conditional probability
+`P(event | state)` with a uniform distribution over events:
+- `α = 0` leaves the table unchanged (no noise).
+- `α = 1` makes all events equally likely in every state (complete noise).
+
+Mixing with a uniform distribution is a convenient way to represent
+unstructured mistakes when the true event depends on state but errors do not.
+
+# Arguments
+- `α`: Noise weight in `[0, 1]` (typically interpreted as an error rate).
+- `p`: Base `Probabilities` table of event likelihoods.
+
+# Returns
+A `Probabilities` object with the same keys as `p` and likelihoods blended with
+a uniform event distribution.
+
+# Example
+    probs_noisy = probα(0.2, probs)
+    probs_noisy[:A]
+"""
+function probα(α, p::Probabilities{T1, T2}) where {T1, T2}
+    error_val = one(T1) / size(p.a, 2)
+    unif = fill(error_val, size(p.a))
+    a = unif * α + p.a * (one(α) - α)
+    return Probabilities(a, p.keys)
+end
+```
+---
+
